@@ -1,0 +1,874 @@
+---
+title: "Analyse du succès reproducteurs des amphibiens - Maîtrise en biologie"
+author: "Claudie Bouffard"
+format:
+  html:
+    embed-resources: true
+toc: true
+editor: visual
+---
+
+**IMPORTANT:** Les codes suivants ont été générés à l’aide de ChatGPT (GPT-6 par OpenAI, 2026) et le support d’Angélique Dupuch et Katrine Turgeon
+
+## Glossaire
+
+### **Liste d’espèces sélectionnées :**
+
+-   **Ambystoma :** Salamandres du genre *Ambystoma*. Les espèces présentes au Québec, la salamandre maculée (*A. maculatum*), la salamandre à points bleues (*A. laterale*) et/ou salamandres du complexe de Jerfferson (*A. jeffersonianum complex*), sont incluses dans cette étude. Celles-ci sont toutes des espèces concidérées comme dépendantes des étangs vernaux et qui partagent un cycle de vie similaires.
+
+-   **LISY :** Grenouille des bois (Lithobates sylvaticus). Espèce dépendante des étangs vernaux.
+
+-   **LICL :** Grenouille verte (*Lithobates clamitans*). Espèce associée aux habitats à canopées ouvertes et étangs permanents. Représente de la compétition/prédateur pour les espèces dépendantes des étangs vernaux.
+
+-   **PSCR :** Rainette cucifère (Pseudacris crucifer). Espèce versatile et non-prédatrice des espèces dépendantes des étangs vernaux.
+
+### **Liste de type de traitements:**
+
+-   **PEH :** Plantation de peuplier hybrides sur monticule (entre 1 à 5 ans). Les arbres sont trop jeunes pour avoir un effet sur l’hydrologie par evapotranspiration. Canopée particulièrement ouverte car les arbres sont petits.
+
+-   **CPPTM :** Coupe avec Protection des Petites Tiges Marchandes. Similaire à la coupe totale mais certains jeunes arbres sont laissés sur place. Ceux-ci ont tendance à tomber avec le vent. Sur les terres de DOMTAR, cette pratique est majoritairement dans des peuplements résineux mais a été vu dans du feuillus
+
+-   **CJ :** Coupe de Jardinage. Coupe qui imite le régime de trouée naturel des forêts de feuillus matures. Cela n’empêche la dégradation du sol par les ornières de machinerie. La canopée reste fermée.
+
+-   **NAT:** Étangs vernaux sélectionnées dans des milieux protégés depuis au moins 70 ans. Celui-ci représente le contrôle pour mon étude.
+
+## Est-ce que l'effort de reproduction des espèces dépendantes varie-t-il selon le type de traitement sylvicole ?
+
+Ici, l'effort de reproduction est représenté par le nombre d'oeufs pondus/m2 dans chaque étangs. Plus la densité d'oeufs est élevée, plus l'effort de reproduction a été grand.
+
+### Ambysomes
+
+1.  **Préparation des données :**
+
+    ```{r}
+    #| warning: false
+    library(readxl)
+    library(dplyr)
+    library(DHARMa)
+
+    df <-read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Oeufs/Data_base_oeufs.xlsx", sheet = 1)
+    df$Traitement <- factor(df$Traitement)
+    df$X <- as.numeric(scale(df$X))
+    df$Y <- as.numeric(scale(df$Y))
+    ```
+
+    Ici, le X et Y est standardisé pour permettre au modèles de mieux gérer. La relation reste inchangée.
+
+    ```{r}
+    with(df, table(Traitement, Amby > 0))
+    ```
+
+    Ici, on peut voir que, pour PEH, seulement 2 étangs sur 16 sont colonisé par les ambystomes. Ceci est plutôt anecdotique. Ainsi, PEH sera retiré de la base de donnée.
+
+    ```{r}
+    df <- df[df$Traitement != "PEH", ]
+    df$Traitement <- droplevels(df$Traitement)
+    df
+    ```
+
+2.  **Choix de l'analyse :**
+
+    Comme évalué durant les analyses de communautés, inclure le x et y des étangs est important pour l'intégrité de l'analyse. Par contre, il faut s'assurer qu'il n'y a pas de correlation entre traitement / X,Y. Ceci pourrait altérer la performance des modèles.
+
+    ```{r}
+    anova(lm(X ~ Traitement, data = df)) 
+    anova(lm(Y ~ Traitement, data = df))
+    ```
+
+    Le X est correct mais Y non, c'est significatif. Il y a de la correlation. C'est probablement parce que NAT est loin des autres traitements. Donc, va falloir avoir préparer les colones nécessaires pour faire une correction de la structure spaciale dans le modèle choisi. Ici, un modèle de la famille GLMM permettera d'appliquer cette correction.
+
+    ```{r}
+    #| warning: false
+    library(glmmTMB)
+    df$position <- numFactor(df$X, df$Y)
+    df$groupe_spatial <- factor(1)
+    ```
+
+    numFactor() permet au modèle de reconnaitre la position de chaque étang et factor(1) s'assure que le modèle voit chaque étang comme partie de même groupe
+
+    ```{r}
+    with(df, table(Traitement, Amby > 0))
+    summary(df$Amby)
+    ```
+
+    On voit qu'il y a beaucoup d'étangs qui ont des zéros. On a aussi une grande variation de donnée (median =1, mean=18.60, max=352). Dans une telle situation nbinom ou poisson pourrait être intéressant.
+
+    Essayons avec nbinom2
+
+    ```{r}
+    #| warning: false
+    library(glmmTMB)
+    mod1_1 <- glmmTMB(Amby ~ Traitement +exp(position + 0 | groupe_spatial)+offset(log(Superficie_m2)),family = nbinom2(link = "log"),data = df)
+    ```
+
+    offset permet de prendre en compte la superficie des étangs qui varie beaucoup d'étang en étang. le link='log' permet de s'assurer de ne pas avoir un nombre d'oeufs prédit négatif ce qui ne ferait pas biologiquement de sens. L'ajout de exp(position + 0 \| groupe_spatia) explique au modèle que les étangs proches les uns des autres pourrait avoir des similarités. Le ''+0'' permet de ne pas inclure les intercept.
+
+    ```{r}
+    #| warning: false
+    library(DHARMa)
+    res1_1 <- simulateResiduals(fittedModel = mod1_1,n = 1000)
+    mod1_1$sdr$pdHess #True, le modèle converge
+    plot(res1_1)
+    testUniformity(res1_1) #ok
+    testDispersion(res1_1) #ok
+    testZeroInflation(res1_1) #ok
+    testQuantiles(res1_1) #ok
+    testSpatialAutocorrelation(res1_1,x = df$X,y = df$Y) #ok
+    ```
+
+    Les résultats de DHARMa ressortent bien, rien de significatif
+
+3.  **Analyse :**
+
+    ```{r}
+    #| warning: false
+    library(emmeans)
+    summary(mod1_1) #le mod agit comme poisson
+    com1 <- emmeans(mod1_1, pairwise ~ Traitement,type = "response", adjust = "holm")
+    com1$contrasts
+    ```
+
+    Ici, rien n'est significatif. À prendre en note le paramètre de dispersion(3.07e+09) est élevé, le modèle agit plus comme une famille poisson.\
+    Ainsi, j'ai testé d'autres modèle en utilisant la famille nbinom1 et Poisson. Ils ont sortis moins beau dans l'analyse de DHARMa, donc je ne les ai pas utilisé:
+
+    ```{r}
+    #NBINOM1
+    mod2_1 <- glmmTMB(Amby ~ Traitement +exp(position + 0 | groupe_spatial)+offset(log(Superficie_m2)),family = nbinom1(link = "log"),data = df)
+    res2_1 <- simulateResiduals(fittedModel = mod2_1,n = 1000)
+    testSpatialAutocorrelation(res2_1,x = df$X,y = df$Y) #pas ok
+    summary(mod2_1)
+
+    #POISSON
+    mod3_1 <- glmmTMB(Amby ~ Traitement +exp(position + 0 | groupe_spatial)+offset(log(Superficie_m2)),family = poisson(link = "log"),data = df)
+    res3_1 <- simulateResiduals(fittedModel = mod3_1,n = 1000)
+    testSpatialAutocorrelation(res3_1,x = df$X,y = df$Y) #pas ok
+    summary(mod3_1)
+    ```
+
+    De toute manière, leur résultats ( summary() ) était le même que nbinom2. Donc il reste que nbinom2 est concistant.
+
+4.  **Visualisation :**
+
+    ```{r}
+    df_V <- read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Oeufs/Data_base_oeufs.xlsx", sheet = 2)
+    df_V$Traitement <- factor(df_V$Traitement,levels = c("NAT", "CJ", "CPPTM"))
+    df_V <- df_V[df_V$Traitement != "PEH", ] #Enlève PEH. On a juste 2 étangs qui ont des salamandres. C'est anecdotique
+    boxplot(Amby ~ Traitement,
+            data = df_V,
+            xlab = "Traitement sylvicole",
+            ylab = expression("Densité d'œufs (œufs/m"^2*")"),
+            main = "Densité d'œufs d'Ambystoma selon le traitement",
+            border = "gray30",
+            las = 1,
+            ylim = c(0, 7))
+    stripchart(Amby ~ Traitement,
+               data = df_V,
+               vertical = TRUE,
+               method = "jitter",
+               pch = 16,
+               col = "gray30",
+               add = TRUE)
+    text(x = 1, y = 3, labels = "a", cex = 2)
+    text(x = 2, y = 6.8, labels = "a", cex = 2)
+    text(x = 3, y = 5, labels = "a", cex = 2)
+    ```
+
+    n NAT=6, n CJ=14, n CPPTM= 13
+
+    \*Note:
+
+    En retirant PEH, seulement 33 étangs ont été conservés. De plus, NAT comporte seulement 6 étangs. À interpréter avec précaution. Plus d'échantillonage devrait être fait pour augmenter la précision des résultats
+
+### LISY
+
+1.  **Préparation des données :**
+
+    ```{r}
+    df2 <-read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Oeufs/Data_base_oeufs.xlsx", sheet = 1)
+    df2$Traitement <- factor(df2$Traitement)
+    df2$X <- as.numeric(scale(df2$X))
+    df2$Y <- as.numeric(scale(df2$Y))
+    df2
+    ```
+
+2.  **Choix de l'analyse :**
+
+    ```{r}
+    summary(df2$LISY)
+    ```
+
+    Ici, on a une distribution super asymétrique: La moyenne est de 9,696, alors que la médiane est de seulement 2. Le maximum 189. Un GLM negative binomial serait intéressant.
+
+    ```{r}
+    #| warning: false
+    library(MASS)
+    mod3 <- glm.nb(LISY ~ Traitement + X + Y +offset(log(Superficie_m2)),data = df2)
+    res3 <- simulateResiduals(fittedModel = mod3,n = 1000)
+    plot(res3) #Nice
+    testUniformity(res3) #ok
+    testDispersion(res3) #ok
+    testZeroInflation(res3) #ok
+    testQuantiles(res3) #ok
+    testSpatialAutocorrelation(res3,x = df2$X,y = df2$Y) #ok
+    ```
+
+    Tout semble bien ici.
+
+    \*Note:\
+    J'ai essayé Poisson et c'était pas du tout adapté.\
+
+    ```{r}
+    mod2 <- glm(LISY ~ Traitement + X + Y +offset(log(Superficie_m2)),family=poisson(link = "log"), data = df2)
+    res2 <- simulateResiduals(fittedModel = mod2,n = 1000)
+    plot(res2) #attroce!
+    ```
+
+3.  **Analyse :**
+
+    ```{r}
+    summary(mod3)
+    ```
+
+    On semble avoir une tendance. CJ semble être différent de CPPPTM. Par contre, ce n'est pas significatif. Tout le reste n'est pas significatif non plus
+
+4.  **Visualisation :**
+
+    ```{r}
+    df_V <- read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Oeufs/Data_base_oeufs.xlsx", sheet = 2)
+    df_V$Traitement <- factor(df_V$Traitement,levels = c("NAT", "CJ", 'PEH', "CPPTM"))
+    boxplot(LISY ~ Traitement,
+            data = df_V,
+            xlab = "Traitement sylvicole",
+            ylab = expression("Densité d'œufs (œufs/m"^2*")"),
+            main = "Densité d'œufs de LISY selon le traitement",
+            border = "gray30",
+            las = 1,
+            ylim = c(0, 3.5))
+    stripchart(LISY ~ Traitement,
+               data = df_V,
+               vertical = TRUE,
+               method = "jitter",
+               pch = 16,
+               col = "gray30",
+               add = TRUE)
+    text(x = 1, y = 1.3, labels = "a", cex = 2)
+    text(x = 2, y = 2, labels = "a", cex = 2)
+    text(x = 3, y = 1.7, labels = "a", cex = 2)
+    text(x = 4, y = 3.3, labels = "a", cex = 2)
+    ```
+
+    n NAT = 6 , n CJ = 14 , n PEH =16 , n CPPTM=13
+
+### Visuel combiné
+
+```{r}
+
+df_V <- read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Oeufs/Data_base_oeufs.xlsx",sheet = 2)
+
+# Ordre des traitements
+df_V$Traitement <- factor(df_V$Traitement,levels = c("NAT", "CJ", "PEH", "CPPTM"))
+
+# Préparer les données : Amby puis LISY pour chaque traitement
+donnees <- list(
+  df_V$Amby[df_V$Traitement == "NAT"],
+  df_V$LISY[df_V$Traitement == "NAT"],
+  df_V$Amby[df_V$Traitement == "CJ"],
+  df_V$LISY[df_V$Traitement == "CJ"],
+  df_V$Amby[df_V$Traitement == "PEH"],
+  df_V$LISY[df_V$Traitement == "PEH"],
+  df_V$Amby[df_V$Traitement == "CPPTM"],
+  df_V$LISY[df_V$Traitement == "CPPTM"]
+)
+
+# Positions des boîtes sur l'axe X
+pos <- c(1, 2, 4, 5, 7, 8, 10, 11)
+
+# Couleurs
+couleurs <- rep(c("lightgreen", "lightgoldenrod"),4)
+
+# Graphique combiné
+boxplot(donnees,
+  at = pos,
+  names = rep("", length(pos)),
+  xlim = c(0, 12),
+  ylim = c(0, 6),
+  xlab = "Traitement sylvicole",
+  ylab = expression("Densité d'œufs (œufs/m"^2*")"),
+  main = "Densité d'œufs d'Amby et de LISY selon le traitement",
+  col = couleurs,
+  border = "gray30",
+  las = 1)
+
+# Ajouter les points individuels
+for (i in seq_along(donnees)) {
+  points(
+    jitter(rep(pos[i], length(donnees[[i]])), amount = 0.12),
+    donnees[[i]],
+    pch = 16,
+    cex = 0.6,
+    col = "gray30")
+}
+
+# Noms des traitements
+axis(1,at = c(1.5, 4.5, 7.5, 10.5),labels = c("NAT", "CJ", "PEH", "CPPTM"),tick = FALSE)
+
+# Légende
+legend(
+  "topleft",
+  legend = c("Amby", "LISY"),
+  fill = c("lightgreen", "lightgoldenrod"),
+  border = "gray30",
+  bty = "n"
+)
+```
+
+Le type de traitement ne semble pas affecter significativement l'effort de reproduction (ponte d'oeuf). En effet, on voit que la majorité des boites se chevauchent, même entre ambystomes et lisy. Si on pousse, on pourrait peut-être voir une tendance pour LISY avec peut-être plus d'oeufs dans CPPTM
+
+## Est-ce que le SLV varie selon le type de traitement ?
+
+Note:\
+SLV signifie Snout to Vent Length. Pour cette étude, ceci a été calculé en mm. La grosseur des larves est un indicateur de la qualité de l'habitat. Selon la littérature, plus les larves seraient grosses, plus la qualité de l'habitat serait bonne.\
+Dans la base de donnée le SVL choisi représente la moyenne entre le SVL Max et SVL Min documenté à la dernière journée de prise de donnée pour l'étang (donc juste avant la mort ou métamorphose des larves, leur donnant autant de temps que possible de développement)
+
+### Ambystome :
+
+1.  **Préparation des données :**
+
+    ```{r}
+    df <-read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Larves/Bio_DataBase_tetard.xlsx", sheet = 1)
+    df <- df[df$amby != 0, ]
+    df
+    ```
+
+2.  **Visualisation :**
+
+    J'ai vraiment pas beaucoup de donnée. Pas certaine que je pourrai faire un analyse statistique qui fait du sens.
+
+    ```{r}
+    df$Traitement <- factor(df$Traitement,levels = c("NAT", "CJ", 'PEH', "CPPTM"))
+    boxplot(amby ~ Traitement,
+            data = df,
+            xlab = "Traitement sylvicole",
+            ylab = 'SLV moyen (mm) au dernier jour de prise de donnée',
+            main = "SLV moyen des Ambystomes selon le traitement",
+            border = "gray30",
+            las = 1)
+    stripchart(amby ~ Traitement,
+               data = df,
+               vertical = TRUE,
+               method = "jitter",
+               pch = 16,
+               col = "gray30",
+               add = TRUE)
+    ```
+
+    n NAT=3, n CJ=8, n PEH= 1, n CPPTM= 4
+
+Il n'y a pas de pattern clair qui sort de ceci. C'est assez variable.
+
+### LISY :
+
+1.  **Préparation des données :**
+
+    ```{r}
+    df <-read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Larves/Bio_DataBase_tetard.xlsx", sheet = 1)
+    df <- df[df$LISY != 0, ]
+    df$X <- as.numeric(scale(df$X))
+    df$Y <- as.numeric(scale(df$Y))
+    df
+    ```
+
+2.  **Visualisation :**
+
+    On a un peu plus de données ici mais ça reste très bas
+
+    ```{r}
+    df$Traitement <- factor(df$Traitement,levels = c("NAT", "CJ", 'PEH', "CPPTM"))
+    boxplot(LISY ~ Traitement,
+            data = df,
+            xlab = "Traitement sylvicole",
+            ylab = 'SLV moyen (mm) au dernier jour de prise de donnée',
+            main = "SLV moyen des LISY selon le traitement",
+            border = "gray30",
+            las = 1)
+    stripchart(LISY ~ Traitement,
+               data = df,
+               vertical = TRUE,
+               method = "jitter",
+               pch = 16,
+               col = "gray30",
+               add = TRUE)
+    ```
+
+    n NAT=4, n CJ=8, n PEH= 9, n CPPTM= 5
+
+Clairement, rien n'est significatif. Pas super intéressant
+
+Bref, en se basant sur l'effort de reproduction et le SLV, il ne semble pas y avoir de différence détectable entre les différents types de traitements.
+
+## Est-ce que le nombre de larve varie selon le type de traitement sylvicole (CPUE) ?
+
+Note: CPUE signifie Capture Per Unit Effort. Ici, le CPUE est représenté par le nombre de larves maximales attrapées / périmètre de l'étang (soit un coup d'épuisette = 1m).
+
+### Ambystome :
+
+1.  **Préparation des données :**
+
+    ```{r}
+    df <-read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Larves/CPUE.xlsx", sheet = 1)
+    df <- df[df$amby != 0, ]
+    df$X <- as.numeric(scale(df$X))
+    df$Y <- as.numeric(scale(df$Y))
+    df
+    ```
+
+2.  **Visualisation :**
+
+    ```{r}
+    df$Traitement <- factor(df$Traitement,levels = c("NAT", "CJ", 'PEH', "CPPTM"))
+    boxplot(amby ~ Traitement,
+            data = df,
+            xlab = "Traitement sylvicole",
+            ylab = 'CPUE (nb larves/nb de swipe du dipnet)',
+            main = "CPUE des Ambystomes selon le traitement",
+            border = "gray30",
+            las = 1)
+    stripchart(amby ~ Traitement,
+               data = df,
+               vertical = TRUE,
+               method = "jitter",
+               pch = 16,
+               col = "gray30",
+               add = TRUE)
+    ```
+
+    n NAT=3, n CJ=8, n PEH= 1, n CPPTM= 4
+
+    Encore une fois, pas beaucoup d'étangs et pas de pattern visible. Non significatif
+
+### LISY :
+
+1.  **Préparation des données :**
+
+    ```{r}
+    df <-read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Larves/CPUE.xlsx", sheet = 1)
+    df <- df[df$LISY != 0, ]
+    df <- df[df$No_etang != '18FRONT5', ] #Il est incroyablement plus élevé que les autres
+    df$X <- as.numeric(scale(df$X))
+    df$Y <- as.numeric(scale(df$Y))
+    df
+    ```
+
+    18FRONT5 était trop élevé (environ 34.5) et qui rendait le graphique difficile à lire.
+
+2.  **Visualisation :**
+
+    ```{r}
+    df$Traitement <- factor(df$Traitement,levels = c("NAT", "CJ", 'PEH', "CPPTM"))
+    boxplot( LISY ~ Traitement,
+            data = df,
+            xlab = "Traitement sylvicole",
+            ylab = 'CPUE (nb têtards/nb de swipe du dipnet)',
+            main = "CPUE des LISY selon le traitement",
+            border = "gray30",
+            las = 1)
+    stripchart(LISY ~ Traitement,
+               data = df,
+               vertical = TRUE,
+               method = "jitter",
+               pch = 16,
+               col = "gray30",
+               add = TRUE)
+    ```
+
+    n NAT=4, n CJ=8, n PEH= 10, n CPPTM= 5
+
+    Ici, il se pourrait que le CPUE de PEH et CPPTM soit plus élevé que celui de NAT et CJ ! Je vais faire une analyse pour confirmer
+
+3.  **Choix du modèle :**
+
+    ```{r}
+    #| warning: false
+    library(lmtest)
+    mod <- lm( LISY ~ Traitement + X + Y, data = df)
+    shapiro.test(residuals(mod)) #Pas normal pentoute
+    bptest(mod) # Homogénéité ok
+    ```
+
+    Avec un lm, on voit que les résiduts ne sont vraiment pas normaux. Va falloir passer au GLM\
+    Puisque les CPUE sont positives, continues et asymétriques, on va opter pour la famille Gamma
+
+4.  **Analyse** :
+
+    ```{r}
+    mod2 <- glm(LISY ~ Traitement + X + Y,data = df,family = Gamma(link = "log")) 
+    res <- simulateResiduals(fittedModel = mod2,n = 1000)
+    plot(res)
+    testUniformity(res) #ok
+    testDispersion(res) #ok
+    testOutliers(res) #ok
+    ```
+
+    Tout est beau ici.
+
+    ```{r}
+    summary(mod2) #Significatif, CPPTM vs CJ!
+    emm <- emmeans(mod2, ~ Traitement, type = "response")
+    emm
+    pairs(emm, adjust = "holm") #la correction de holm rend le tout non significatif
+    pairs(emm, adjust = "none")
+    ```
+
+On a quelque chose de intéressant. Sans correction, il semblerait que le CPUE de CPPTM et CJ sont significativement différents. Par contre, avec correction, la significativité s'efface. Donc, à prendre avec un grain de sel. Par contre, il est intéressant de prendre en compte la tendance. Il semblerait avoir plus de têtards dans les traitements à couverture ouvertes (PEH et CPPTM) que dans les traitements à couverture fermées. Ceci pourrait être expliqué par le manque de prédation par les têtards de grenouilles vertes.
+
+### Visuels combinés
+
+```{r}
+df <-read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Reproduction/Larves/CPUE.xlsx", sheet = 1)
+df <- df[df$amby != 0, ]
+df <- df[df$LISY != 0, ]
+df <- df[df$No_etang != '18FRONT5', ] #Il est incroyablement plus élevé que les autres
+df$Traitement <- factor(df$Traitement,levels = c("NAT", "CJ", "PEH", "CPPTM"))
+
+# 1. Définir l'ordre des traitements
+df$Traitement <- factor(df$Traitement,
+                        levels = c("NAT", "CJ", "PEH", "CPPTM"))
+
+# 2. Définir les positions des boîtes
+pos <- 1:4
+pos_amby <- pos - 0.22
+pos_lisy <- pos + 0.22
+
+# 3. Séparer les données par traitement
+amby_liste <- split(df$amby, df$Traitement)
+lisy_liste <- split(df$LISY, df$Traitement)
+
+# 4. Créer le graphique
+plot(NA,
+     xlim = c(0.4, 4.6),
+     ylim = c(0, 11),
+     xaxt = "n",
+     xlab = "Traitement sylvicole",
+     ylab = "CPUE (nb larves ou têtards / nb de swipes du dipnet)",
+     main = "CPUE des amphibiens selon le traitement")
+axis(1, at = pos, labels = levels(df$Traitement))
+
+# 5. Boîtes des Ambystomes
+boxplot(amby_liste,
+        at = pos_amby,
+        add = TRUE,
+        col = "lightgreen",
+        border = "gray30",
+        boxwex = 0.35,
+        outline = FALSE,
+        axes = FALSE)
+stripchart(amby_liste,
+           at = pos_amby,
+           vertical = TRUE,
+           method = "jitter",
+           jitter = 0.08,
+           pch = 16,
+           cex = 0.7,
+           col = "gray30",
+           add = TRUE)
+
+# 6. Boîtes des LISY
+boxplot(lisy_liste,
+        at = pos_lisy,
+        add = TRUE,
+        col = "lightgoldenrod",
+        border = "gray30",
+        boxwex = 0.35,
+        outline = FALSE,
+        axes = FALSE)
+stripchart(lisy_liste,
+           at = pos_lisy,
+           vertical = TRUE,
+           method = "jitter",
+           jitter = 0.08,
+           pch = 16,
+           cex = 0.7,
+           col = "gray30",
+           add = TRUE)
+
+# 7. Légende
+legend("topleft",
+       legend = c("Ambystomes", "LISY"),
+       fill = c("lightgreen", "lightgoldenrod"),
+       border = "gray30",
+       bty = "n")
+
+```
+
+Il semblerait que le nombre de larves na varie pas vraiment entre Ambystome et LISY.
+
+## Est-ce que la date de sortie (metamorphose) des larves varie selon le type de traitement ?
+
+Devrait être similiaire aux résultats des SLV. Plus les larves sortent tardivement de l'étang, plus la qualité de celui-ci devrait être bonne. Ici, on va juste faire LISY puisqu'on a pas assez de métamorphose assurée pour les Ambystomes.
+
+1.  **Préparation des données** :
+
+    ```{r}
+    PS <- read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Hydro_Survie/LISY_Database_Survie.xlsx", sheet = 1)
+    PS <- PS[rowSums(!is.na(PS[, -1])) > 0, ]
+    PS[PS == "NA"] <- NA
+    PS <- filter(PS, !if_all(-No_etang, is.na))
+    PS$No_etang <- as.factor(PS$No_etang)
+    PS$AvantDer_prise <- as.numeric(PS$AvantDer_prise)
+    PS$Der_prise <- as.numeric(PS$Der_prise)
+    PS$Statut <- as.numeric(PS$Statut)
+    PS$X <- as.numeric(PS$X)
+    PS$Y <- as.numeric(PS$Y)
+    PS$X <- as.numeric(scale(PS$X))
+    PS$Y <- as.numeric(scale(PS$Y))
+    PS$Condition <- as.factor(PS$Condition)
+    PS$Traitements <- as.factor(PS$Traitements)
+    PS <- PS[PS$Condition == "meta", ]
+    PS$Temps_milieu <- ifelse(is.na(PS$Der_prise),PS$AvantDer_prise,(PS$AvantDer_prise + PS$Der_prise) / 2)
+    ```
+
+    Pour ''temps_milieu'' note que avant cette ligne, j'ai seulement des intervals de temps entre lesquels dans la métamorphose c'est produit puisque je ne visitais pas mes étangs à chaques jours, mais en fait, à chaque deux semaines. Toutefois, les intervals ne sont pas idéales pour mes modèles. Alors, je décide de choisir la journée ''entre deux''.
+
+2.  **Choix de l'analyse** :
+
+    ```{r}
+    mod <- lm(Temps_milieu ~ Traitements + X + Y, data = PS)
+    shapiro.test(residuals(mod)) #Normalité ok
+    bptest(mod) # Homogénéité ok
+    ```
+
+    Pas compliqué ici, le simple lm fonctionne très bien :)
+
+3.  **Analyse** :
+
+    ```{r}
+    summary(mod) #NAT très significatif!
+    emm <- emmeans(mod, ~ Traitements)
+    pairs(emm, adjust = "tukey") #Nat diffère des autres!
+    ```
+
+    C'est très claire, la date de sortie des têtards de LISY est clairement plus élevé pour le traitement NAT
+
+4.  **Visualisation** :
+
+    ```{r}
+    PS$Traitement <- factor(PS$Traitements,levels = c("NAT", "CJ", 'PEH', "CPPTM"))
+    boxplot(Temps_milieu ~ Traitements,
+            data = PS,
+            xlab = "Traitement sylvicole",
+            ylab = 'Jour Julien approximatif de sortie de l\'etang des LISY',
+            border = "gray30",
+            las = 1,
+            ylim = c(170, 245))
+    stripchart(Temps_milieu ~ Traitements,
+               data = PS,
+               vertical = TRUE,
+               method = "jitter",
+               pch = 16,
+               col = "gray30",
+               add = TRUE)
+    text(x = 1, y = 210, labels = "a", cex = 2)
+    text(x = 2, y = 200, labels = "a", cex = 2)
+    text(x = 3, y = 245, labels = "b", cex = 2)
+    text(x = 4, y = 205, labels = "a", cex = 2)
+    ```
+
+## Est-ce que le succès reproducteur (survit jusqu'à la métamorphose) varie selon le type de traitement ?
+
+Note que toutes les mortalités inventoriées durant la période de terrain étaient reliées à une hydropériode trop courte à l'exception des mortalités dans les PEH qui sont un cas confirmé de Ranavirus par l'UQAM.
+
+1.  **Préparation des données** :
+
+    | Code | Signification              | Rôle                |
+    |------|----------------------------|---------------------|
+    | 1    | Mort                       | Évènement d'intérêt |
+    | 2    | Metamorphose               | Risque compétitif   |
+    | 3    | Indéterminé                | Risque compétitif   |
+    | 0    | Fin de la prise de données | Censure à droite    |
+
+    ```{r}
+    PS <- read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Hydro_Survie/FineGray_PoolSpecific_Database.xlsx", sheet = 1)
+    PS[PS == "NA"] <- NA
+    PS <- filter(PS, !if_all(-No_etang, is.na))
+    PS$No_etang <- as.factor(PS$No_etang)
+    PS$AvantDer_prise <- as.numeric(PS$AvantDer_prise)
+    PS$Der_prise <- as.numeric(PS$Der_prise)
+    PS$Statut <- as.numeric(PS$Statut)
+    PS$Condition <- as.factor(PS$Condition)
+    PS$Traitements <- as.factor(PS$Traitements)
+    PS
+    ```
+
+2.  **Choix de l'analyse** :
+
+    Ici, je dois modéliser les chances de mortalité à travers le temps en prenant compte que j'ai des évènements qui font ''competition'' comme la métamorphose (la logique étant que si les amphibiens se métamorphosent dans l'étang, ils ne peuvent plus mourrir) en plus de censures à droite (des étangs qui ont ni séchés ni eux de métamorphose jusqu'à la fin de la prise de donnée.\
+
+    Le modèle de Cox n'est pas approprié pour cette situation puisqu'il ne permet pas d'avoir des évènements compétitifs comme la métamorphose. Ainsi, une analyse de Fine-Gray est la meilleure option que nous avons pour la situation.\
+    \
+    Toutefois, si je veux utiliser Fine-Gray, je dois ajuster ma base de donnée. Présentement, j'ai plusieurs un intervals de temps dans lequel l'évènement c'est produit puisque je ne visitais pas mes étangs à chaques jours, mais en fait, à chaque deux semaines. Toutefois, Fine-Gray n'accepte pas les intervals. Alors, je décide de choisir la journée ''entre deux''.
+
+    ```{r}
+    PS$Temps_milieu <- ifelse(is.na(PS$Der_prise),PS$AvantDer_prise,(PS$AvantDer_prise + PS$Der_prise) / 2)
+    PS
+    ```
+
+3.  **Analyse** :
+
+    ```{r}
+    table(PS$Traitements, PS$Statut)
+    PS$Traitements <- relevel(PS$Traitements, ref = "CJ")
+    ```
+
+    Ici, CJ a été choisi comme référence puisqu'il a beaucoup de mortalité. Si je choisi ''PEH'' le modèle deviens instable puisqu'il se réfère à un traitement qui a 0 mortalité
+
+    ```{r}
+    #| warning: false
+    library(survival)
+    library(cmprsk)
+    Trait2 <- model.matrix(~ Traitements, data = PS)[, -1]
+    FG_mort2 <- crr(ftime = PS$Temps_milieu,fstatus = PS$Statut,cov1 = Trait2, failcode=1,cencode=0, maxiter = 100) #code de l'évènement d'intéret =1 mort par hydroperiode
+    FG_mort2$converged
+    summary(FG_mort2)
+    ```
+
+    Le modèle a effectivement convergé. Par contre, il n'est pas super fiable (coef de PEH = -14.804, c'est haut). Ceci découle de l'essence de mes données. J'ai retiré toutes les mortalités causées par le Ranavirus dans ma base de donnée de PEH. Ainsi, j'ai eux aucune autre mortalité. Puisque PEH a une mortalité de zéro, le modèle deviens instable, peu importe si j'augmente maxiter. C'est juste la nature des données.\
+    Ici, on voit que PEH serait significativement différent comparé à CJ (à prendre avec précaution dut à l'instabilité du modèle). Il faut tester les autres types de traitements:
+
+    ```{r}
+    PS$Traitements <- relevel(PS$Traitements, ref = "CPPTM")
+    Trait2 <- model.matrix(~ Traitements, data = PS)[, -1]
+    FG_mort2 <- crr(ftime = PS$Temps_milieu,fstatus = PS$Statut,cov1 = Trait2, failcode=1,cencode=0, maxiter = 100) #code de l'évènement d'intéret =1 mort par hydroperiode
+    FG_mort2$converged
+    summary(FG_mort2) #PEH diffère de CPPTM
+
+    PS$Traitements <- relevel(PS$Traitements, ref = "NAT")
+    Trait2 <- model.matrix(~ Traitements, data = PS)[, -1]
+    FG_mort2 <- crr(ftime = PS$Temps_milieu,fstatus = PS$Statut,cov1 = Trait2, failcode=1,cencode=0, maxiter = 100) #code de l'évènement d'intéret =1 mort par hydroperiode
+    FG_mort2$converged
+    summary(FG_mort2) #PEH diffère de NAT, tout les autres traitements se ressemblent!
+    ```
+
+    Avec ces résultats, le nombre de mortalité serait significativement plus basse dans PEH comparé à tous les autres types de traitements! La mortalité ne serait pas significativement différente entre les autres traitement.
+
+4.  **Visualisation** :
+
+    ```{r}
+    cif3<- with(PS,cuminc( ftime = Temps_milieu, fstatus = Statut, group = Traitements))
+    plot(cif3[c("CJ 1","PEH 1","CPPTM 1","NAT 1")], lwd = 2,lty=rep(1,4),
+         color=c('black','blue','red','green'),
+         xlab = "Temps écoulé (Jours Juliens)",
+         ylab = "Probabilité cumulée de mortalité d\'amphibiens lié à l'hydropériode",
+         xlim=c(0,140),
+         curvlab = NA,
+         xaxt = "n")
+    axis(side = 1,            
+         at = seq(0,140, by = 20))
+    abline(v = 51, lty = 2)
+    legend(x=0,y=1,
+           legend = c("CJ (n=19)", "PEH (n=14)", "CPPTM (n=15)", "NAT (n=6)"),
+           col = c('black','blue','red','green'),
+           lwd = 2,
+           bg = 'white',
+           box.lty=0)
+    legend(x=30, y = -0.15,
+           legend = "Transition œufs → larves",
+           lty = 2,
+           bty = "n",
+           xpd = TRUE,
+           cex=0.8)
+    ```
+
+Plus la courbe est élevée, plus les probabilité de mourrir sont élevée. Ici, CPPTM s'arrête plus tôt puisque nous ne sommes pas été voir les étangs de CPPTM en août par limitations de terrain. Ici, on peut voir qu'il n'y a techniquement aucune chance de mourrir à cause d'une hydropériode trop courte pour les étangs de PEH, supporté par le modèle Fine-Gray (quoi que pas super fiable).
+
+## PT.2 Est-ce que le succès reproducteur (survit jusqu'à la métamorphose) varie selon le type de traitement ?
+
+Je n'ai pas été satisfaite du modèle Fine-Gray pour la mortalité. Il n'était pas stable puisque PEH a 0 mortalité. J'ai donc essayé de nouveau avec un évènement qui est présent dans TOUT les traitements: la métamorphose.\
+Donc, pour ce cas, la mortalité sera un évènement compétitif et la métamorphose est l'évènement d'intérêt!
+
+1.  **Préparation des données:**
+
+    ```{r}
+    PS <- read_excel("C:/Users/super/Université du Québec en Outaouais/CLAUDIE ÉTANGS VERNAUX - Documents/Stats/Hydro_Survie/FineGray_PoolSpecific_Database.xlsx", sheet = 1)
+    PS[PS == "NA"] <- NA
+    PS <- filter(PS, !if_all(-No_etang, is.na))
+    PS$No_etang <- as.factor(PS$No_etang)
+    PS$AvantDer_prise <- as.numeric(PS$AvantDer_prise)
+    PS$Der_prise <- as.numeric(PS$Der_prise)
+    PS$Statut <- as.numeric(PS$Statut)
+    PS$Condition <- as.factor(PS$Condition)
+    PS$Traitements <- as.factor(PS$Traitements)
+    PS$Temps_milieu <- ifelse(is.na(PS$Der_prise),PS$AvantDer_prise,(PS$AvantDer_prise + PS$Der_prise) / 2)
+    PS
+    ```
+
+2.  **Analyse :**
+
+```{r}
+PS$Traitements <- relevel(PS$Traitements, ref = "PEH")
+Trait2 <- model.matrix(~ Traitements, data = PS)[, -1]
+FG_meta2 <- crr(ftime = PS$Temps_milieu,fstatus = PS$Statut,cov1 = Trait2, failcode=2,cencode=0, maxiter = 100) #code de l'évènement d'intéret =2 métamorphose
+FG_meta2$converged
+summary(FG_meta2)
+
+PS$Traitements <- relevel(PS$Traitements, ref = "CJ")
+Trait2 <- model.matrix(~ Traitements, data = PS)[, -1]
+FG_meta2 <- crr(ftime = PS$Temps_milieu,fstatus = PS$Statut,cov1 = Trait2, failcode=2,cencode=0, maxiter = 100)
+FG_meta2$converged
+summary(FG_meta2) 
+
+PS$Traitements <- relevel(PS$Traitements, ref = "CPPTM")
+Trait2 <- model.matrix(~ Traitements, data = PS)[, -1]
+FG_meta2 <- crr(ftime = PS$Temps_milieu,fstatus = PS$Statut,cov1 = Trait2, failcode=2,cencode=0, maxiter = 100)
+FG_meta2$converged
+summary(FG_meta2) 
+
+PS$Traitements <- relevel(PS$Traitements, ref = "NAT")
+Trait2 <- model.matrix(~ Traitements, data = PS)[, -1]
+FG_meta2 <- crr(ftime = PS$Temps_milieu,fstatus = PS$Statut,cov1 = Trait2, failcode=2,cencode=0, maxiter = 100)
+FG_meta2$converged
+summary(FG_meta2) 
+```
+
+Ici, les coef sont beaucoup plus beau. Les modèles sont plus stables. Contrairement à l'analyse de mortalité, rien est significatif. Aucun traitement aurait plus de chances de métamorphoses que les autres.
+
+3.  **Visualisation**
+
+    ```{r}
+    cif3<- with(PS,cuminc( ftime = Temps_milieu, fstatus = Statut, group = Traitements))
+    plot(cif3[c("CJ 2","PEH 2","CPPTM 2","NAT 2")], lwd = 2,lty=rep(1,4),
+         color=c('black','blue','red','green'),
+         xlab = "Temps écoulé (Jours Juliens)",
+         ylab = "Probabilité cumulée de métamorphose",
+         xlim=c(0,140),
+         curvlab = NA,
+         xaxt = "n")
+    axis(side = 1,            
+         at = seq(0,140, by = 20))
+    abline(v = 51, lty = 2)
+    legend(x=0,y=1,
+           legend = c("CJ (n=19)", "PEH (n=14)", "CPPTM (n=15)", "NAT (n=6)"),
+           col = c('black','blue','red','green'),
+           lwd = 2,
+           bg = 'white',
+           box.lty=0)
+    legend(x=30, y = -0.15,
+           legend = "Transition œufs → larves",
+           lty = 2,
+           bty = "n",
+           xpd = TRUE,
+           cex=0.8)
+    ```
+
+Bien que non significatif, on voit ici la même tendance qu'on a vu dans les mortalités. Il semblerait que les chances de métamorphoses dans PEH est relativement plus élevée que les autres, étant, surpenament, NAT qui a le moins de chances. Ceci est probablement dut que 3 de mes 6 échantillons sont morts à cause de l'année exceptionnellement sèche.
+
+4.  **Conclusion**
+
+    La littérature semble expliquer qu'une mortalité élevé durant une sécheresse en nature est frequemment observée. C'est pourquoi que les ambystomes et LISY pondent aussi dans les étangs permanants. C'est juste que, dans des années mouillées ou sans sécheresse, ceux qui ont opté pour les étangs vernaux auraient plus de succès reproducteur.\
+    Ici, on a une situation de sécheresse, ce qui explique les résultats et ce qui est inquiétant pour le futur des amphibiens forestier puisqu'on prédit une météo de plus en plus instable. Les PEH vont être très utile pour les LISY mais inquiétant pour les ambystomes
+
+# Conclusion :
+
+Bien que la mortalité dut à l'hydropériode est élevée dans les NAT, pour les naturels étangs qui garde plus d'eau, les LISY peuvent prendre beaucoup plus de temps avant de sortir de l'étang. Ceci est intéressant, surtout sachant que les PEH garde l'eau très longtemps mais, les LISY décident de sortir tout de même rapidement. La présence de grenouilles vertes pourrait en être la cause (prédation / compétition). Peu importe la longueur de l'hydropériode, les conditions de NAT sont tout de même exceptionnels. Surprenament, le SLV de NAT n'était pas plus élevé que les autres, ce qui contredit un peu la littérature.\
+Un résultat qui a aussi été non attendu: aucun traitement n'est ressortis significatif pour l'effort de reproduction (oeufs). C'est pourtant sur les études qui exploraient quels éléments environnementaux affecte cet aspect sur lesquels je me suis inspirée pour choisir mes valeurs environnementales à évaluer pour mon étude.
+
+Avec les analyses de Fine-Gray, on voit que les chances de mortalité pour LISY dans les PEH est très bas. Du moins, lorsque la plantation est jeune, les étangs créés par la machinerie aide au recrutement des anoures (quoi qu'ils sont completement innaccesible pour les ambystomes à cause de la canopée trop ouverte). Toutefois, si l'étang conserve assez longtemps, les chances de métamorphose des PEH n'est pas nécessairement plus élevé qu'ailleurs. Donc le facteur limitant les chances de métamorphoses n'est pas nécessairement la compétition / prédation par les autres espèces (grenouille vertes et rainette crucifère), c'est en fait l'hydropériode.
